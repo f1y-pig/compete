@@ -83,6 +83,6 @@ def multi_format_qa(
 
 # -------------------------- 工具启动入口 --------------------------
 if __name__ == "__main__":
-    print("🚀 Starting Multi-Format QA Tool (MCP Server)...")
+    print("Starting Multi-Format QA Tool (MCP Server)...")
     print("Listening for requests...")
     mcp.run()  # 启动 MCP 服务，等待调用
