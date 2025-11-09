@@ -1,112 +1,80 @@
 # mcp_servers/inventory_tools.py
-"""Inventory management tools."""
+"""Dynamic inventory management tools (data loaded from JSON)."""
 
+import json
 from datetime import datetime
-
+from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 mcp = FastMCP()
 
-NAME_TO_ID = {
-    "Product A": "PROD001",
-    "Product B": "PROD002",
-    "Product C": "PROD003",
-}
+# ========================
+# 数据文件路径
+# ========================
+DATA_FILE = Path(__file__).parent / "inventory_data.json"
 
-INVENTORY = {
-    "PROD001": {
-        "product_id": "PROD001",
-        "product_name": "Product A",
-        "total_stock": 1500,
-        "available_stock": 1200,
-        "reserved_stock": 300,  # Prevents reserved stock from being sold
-        "warehouse_locations": {
-            "Warehouse A": 400,
-            "Warehouse B": 500,
-            "Warehouse C": 300,
-            "Warehouse D": 0,
-        },
-        "low_stock_threshold": 100,
-        "last_restock_date": "2024-01-10",
-        "supplier": "Supplier A",
-    },
-    "PROD002": {
-        "product_id": "PROD002",
-        "product_name": "Product B",
-        "total_stock": 800,
-        "available_stock": 650,
-        "reserved_stock": 150,
-        "warehouse_locations": {
-            "Warehouse A": 200,
-            "Warehouse B": 300,
-            "Warehouse C": 150,
-            "Warehouse D": 0,
-        },
-        "low_stock_threshold": 50,
-        "last_restock_date": "2024-01-08",
-        "supplier": "Supplier A",
-    },
-    "PROD003": {
-        "product_id": "PROD003",
-        "product_name": "Product C",
-        "total_stock": 3000,
-        "available_stock": 2800,
-        "reserved_stock": 200,
-        "warehouse_locations": {
-            "Warehouse A": 800,
-            "Warehouse B": 1000,
-            "Warehouse C": 700,
-            "Warehouse D": 300,
-        },
-        "low_stock_threshold": 500,
-        "last_restock_date": "2024-01-12",
-        "supplier": "Supplier B",
-    },
-}
+# ========================
+# 读取库存数据
+# ========================
+def load_inventory():
+    """从 JSON 文件加载库存数据"""
+    if not DATA_FILE.exists():
+        return {"NAME_TO_ID": {}, "INVENTORY": {}}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_inventory(data):
+    """将库存数据写回 JSON 文件"""
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# 初始化库存
+data = load_inventory()
+NAME_TO_ID = data.get("NAME_TO_ID", {})
+INVENTORY = data.get("INVENTORY", {})
+
+# ========================
+# 工具函数
+# ========================
+def resolve_product_id(pid_or_name: str):
+    """支持用产品名或ID查询"""
+    if pid_or_name in INVENTORY:
+        return pid_or_name
+    elif pid_or_name in NAME_TO_ID:
+        return NAME_TO_ID[pid_or_name]
+    else:
+        return None
 
 
 @mcp.tool(description="Query inventory info by product ID or name")
 def check_inventory(product_id: str = Field(description="Product ID or name")) -> dict:
-    """Query detailed inventory info for a specific product."""
-    if product_id not in INVENTORY:
-        if product_id in NAME_TO_ID:
-            product_id = NAME_TO_ID[product_id]
-        else:
-            return {"error": f"Product ID or name {product_id} does not exist."}
+    pid = resolve_product_id(product_id)
+    if not pid:
+        return {"error": f"Product ID or name {product_id} does not exist."}
 
-    inventory_info = INVENTORY[product_id].copy()
-    # Add stock status
-    if inventory_info["available_stock"] <= inventory_info["low_stock_threshold"]:
-        inventory_info["stock_status"] = "Low Stock Warning"
-    elif inventory_info["available_stock"] == 0:
+    inventory_info = INVENTORY[pid].copy()
+    # 添加库存状态
+    if inventory_info["available_stock"] == 0:
         inventory_info["stock_status"] = "Out of Stock"
+    elif inventory_info["available_stock"] <= inventory_info["low_stock_threshold"]:
+        inventory_info["stock_status"] = "Low Stock Warning"
     else:
         inventory_info["stock_status"] = "Sufficient Stock"
 
     return inventory_info
 
 
-@mcp.tool(
-    description="Check if the specified quantity of a product is available in stock"
-)
+@mcp.tool(description="Check if enough stock exists for an order")
 def check_stock_availability(
     product_id: str = Field(description="Product ID or name"),
     quantity: int = Field(description="Required quantity"),
 ) -> dict:
-    """
-    Check if there is sufficient stock to fulfill an order.
+    pid = resolve_product_id(product_id)
+    if not pid:
+        return {"error": f"Product ID or name {product_id} does not exist."}
 
-    Returns:
-        dict: Availability status and details.
-    """
-    if product_id not in INVENTORY:
-        if product_id in NAME_TO_ID:
-            product_id = NAME_TO_ID[product_id]
-        else:
-            return {"error": f"Product ID or name {product_id} does not exist."}
-
-    inventory = INVENTORY[product_id]
+    inventory = INVENTORY[pid]
     available_stock = inventory["available_stock"]
 
     if quantity <= available_stock:
@@ -114,7 +82,7 @@ def check_stock_availability(
             "available": True,
             "requested_quantity": quantity,
             "available_stock": available_stock,
-            "message": f"Sufficient stock available to fulfill the order of {quantity} units.",
+            "message": f"Sufficient stock to fulfill {quantity} units.",
         }
     else:
         return {
@@ -126,26 +94,17 @@ def check_stock_availability(
         }
 
 
-@mcp.tool(description="Release reserved stock (called when an order is canceled)")
+@mcp.tool(description="Release reserved stock after order cancellation")
 def release_reserved_stock(
     product_id: str = Field(description="Product ID or name"),
     quantity: int = Field(description="Quantity to release"),
     order_id: str = Field(description="Order ID"),
 ) -> dict:
-    """
-    Release reserved stock for a canceled order.
+    pid = resolve_product_id(product_id)
+    if not pid:
+        return {"success": False, "message": "Product does not exist."}
 
-    Returns:
-        dict: Release status and updated available stock.
-    """
-    if product_id not in INVENTORY:
-        if product_id in NAME_TO_ID:
-            product_id = NAME_TO_ID[product_id]
-        else:
-            return {"success": False, "message": "Product does not exist."}
-
-    inventory = INVENTORY[product_id]
-
+    inventory = INVENTORY[pid]
     if quantity > inventory["reserved_stock"]:
         return {
             "success": False,
@@ -154,6 +113,7 @@ def release_reserved_stock(
 
     inventory["reserved_stock"] -= quantity
     inventory["available_stock"] += quantity
+    save_inventory({"NAME_TO_ID": NAME_TO_ID, "INVENTORY": INVENTORY})
 
     return {
         "success": True,
@@ -162,96 +122,57 @@ def release_reserved_stock(
     }
 
 
-@mcp.tool(description="Get a list of all low stock products")
+@mcp.tool(description="List products with low stock")
 def get_low_stock_products() -> list:
-    """
-    Retrieve a list of products with stock below their threshold.
-
-    Returns:
-        list: List of products with low stock.
-    """
     low_stock_items = []
+    for pid, inv in INVENTORY.items():
+        if inv["available_stock"] <= inv["low_stock_threshold"]:
+            low_stock_items.append({
+                "product_id": pid,
+                "product_name": inv["product_name"],
+                "available_stock": inv["available_stock"],
+                "low_stock_threshold": inv["low_stock_threshold"],
+                "urgency": "Critical" if inv["available_stock"] == 0 else "Warning",
+            })
 
-    for product_id, inventory in INVENTORY.items():
-        if inventory["available_stock"] <= inventory["low_stock_threshold"]:
-            low_stock_items.append(
-                {
-                    "product_id": product_id,
-                    "product_name": inventory["product_name"],
-                    "available_stock": inventory["available_stock"],
-                    "low_stock_threshold": inventory["low_stock_threshold"],
-                    "urgency": "Critical"
-                    if inventory["available_stock"] == 0
-                    else "Warning",
-                }
-            )
-
-    if not low_stock_items:
-        return [{"message": "No products with low stock."}]
-    return low_stock_items
+    return low_stock_items or [{"message": "No products with low stock."}]
 
 
-@mcp.tool(description="Query inventory distribution by warehouse")
+@mcp.tool(description="Query stock in a specific warehouse")
 def get_inventory_by_warehouse(
     warehouse: str = Field(description="Warehouse name"),
 ) -> dict:
-    """
-    Retrieve the inventory distribution for all products in a specific warehouse.
-
-    Returns:
-        dict: Products and their stock in the given warehouse.
-    """
-    warehouse_inventory = {}
-
-    for product_id, inventory in INVENTORY.items():
-        if warehouse in inventory["warehouse_locations"]:
-            warehouse_inventory[product_id] = {
-                "product_name": inventory["product_name"],
-                "stock": inventory["warehouse_locations"][warehouse],
-                "total_available": inventory["available_stock"],
+    result = {}
+    for pid, inv in INVENTORY.items():
+        if warehouse in inv["warehouse_locations"]:
+            result[pid] = {
+                "product_name": inv["product_name"],
+                "stock": inv["warehouse_locations"][warehouse],
+                "total_available": inv["available_stock"],
             }
-
     return {
         "warehouse": warehouse,
-        "products": warehouse_inventory,
+        "products": result,
         "query_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
-@mcp.tool(description="Get restock suggestions")
+@mcp.tool(description="Get automatic restock suggestions")
 def get_restock_suggestions() -> list:
-    """
-    Generate restock suggestions for products with low stock.
-
-    Returns:
-        list: Restock suggestions including recommended quantity and urgency.
-    """
     suggestions = []
-
-    for product_id, inventory in INVENTORY.items():
-        if inventory["available_stock"] <= inventory["low_stock_threshold"]:
-            suggested_quantity = (
-                inventory["low_stock_threshold"] * 3 - inventory["total_stock"]
-            )
-
-            suggestions.append(
-                {
-                    "product_id": product_id,
-                    "product_name": inventory["product_name"],
-                    "current_stock": inventory["available_stock"],
-                    "suggested_restock": max(suggested_quantity, 0),
-                    "supplier": inventory["supplier"],
-                    "priority": "High"
-                    if inventory["available_stock"]
-                    <= inventory["low_stock_threshold"] // 2
-                    else "Medium",
-                    "last_restock": inventory["last_restock_date"],
-                }
-            )
-
-    if not suggestions:
-        return [{"message": "Stock levels are sufficient. No restocking needed."}]
-    return suggestions
+    for pid, inv in INVENTORY.items():
+        if inv["available_stock"] <= inv["low_stock_threshold"]:
+            need = inv["low_stock_threshold"] * 3 - inv["total_stock"]
+            suggestions.append({
+                "product_id": pid,
+                "product_name": inv["product_name"],
+                "current_stock": inv["available_stock"],
+                "suggested_restock": max(need, 0),
+                "supplier": inv["supplier"],
+                "priority": "High" if inv["available_stock"] <= inv["low_stock_threshold"] // 2 else "Medium",
+                "last_restock": inv["last_restock_date"],
+            })
+    return suggestions or [{"message": "Stock levels are sufficient."}]
 
 
 if __name__ == "__main__":
