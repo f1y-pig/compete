@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from dotenv import load_dotenv
 from oxygent import MAS, Config, oxy
-from mcp_servers.multi_file_tools import prepare_file_for_llm
+from multi_file_tools import prepare_file_for_llm
 
 # -------------------------- 基础配置 --------------------------
 # 加载环境变量（LLM 密钥/地址）
