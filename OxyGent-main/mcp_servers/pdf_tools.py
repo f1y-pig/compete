@@ -1,4 +1,4 @@
-"""PDF processing tools with path debug."""
+"""PDF processing tools with path debug and OCR support."""
 
 import json
 import fitz  # PyMuPDF
@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from pdf2image import convert_from_path
 from pathlib import Path
 import re
+import pytesseract
 
 mcp = FastMCP()
 
@@ -28,41 +29,57 @@ def resolve_file_path(file_input: str) -> Path:
 
     test_dir_path = Path(TEST_DIR) / file_input
     project_root_path = Path(PROJECT_ROOT) / file_input
-    recommended_path = test_dir_path if test_dir_path.exists() else project_root_path
-    return recommended_path.resolve()
+    if test_dir_path.exists():
+        return test_dir_path.resolve()
+    elif project_root_path.exists():
+        return project_root_path.resolve()
+    else:
+        raise FileNotFoundError(f"File not found in TEST_DIR or PROJECT_ROOT: {file_input}")
 
 
-@mcp.tool(description="提取PDF文本内容")
-def extract_pdf_text(pdf_path: str) -> str:
-    """提取PDF文本内容"""
+@mcp.tool(description="提取PDF文本内容，支持扫描件OCR")
+def extract_pdf_text(pdf_path: str, use_ocr: bool = True) -> str:
+    """提取PDF文本内容，如果是扫描 PDF 可启用 OCR"""
     try:
         path = resolve_file_path(pdf_path)
         doc = fitz.open(path)
-        text = []
-        for page in doc:
-            text.append(page.get_text())
+        text_pages = []
+
+        for page_no, page in enumerate(doc):
+            text = page.get_text().strip()
+            if not text and use_ocr:
+                # OCR 提取
+                images = convert_from_path(str(path), first_page=page_no+1, last_page=page_no+1)
+                if images:
+                    ocr_text = pytesseract.image_to_string(images[0], lang='chi_sim')
+                    text_pages.append(ocr_text)
+                else:
+                    text_pages.append("")
+            else:
+                text_pages.append(text)
         doc.close()
-        return "\n".join(text)
+        return "\n".join(text_pages)
     except Exception as e:
         return f"Error extracting PDF text: {str(e)}"
 
 
-@mcp.tool(description="统计PDF中的图片数量（嵌入 + 扫描）")
+@mcp.tool(description="统计PDF中的图片数量（嵌入 + 扫描页）")
 def count_pdf_images(pdf_path: str) -> str:
-    """统计PDF中的图片数量"""
+    """统计 PDF 中的图片数量，包括扫描页"""
     try:
         path = resolve_file_path(pdf_path)
         doc = fitz.open(path)
         total_images = 0
-        for page in doc:
-            imgs = page.get_images(full=True)
-            total_images += len(imgs)
 
-        # 扫描页至少算一张
-        pages = convert_from_path(path)
-        for i, _ in enumerate(pages):
-            if len(doc[i].get_images(full=True)) == 0:
-                total_images += 1
+        for page_no, page in enumerate(doc):
+            imgs = page.get_images(full=True)
+            if imgs:
+                total_images += len(imgs)
+            else:
+                # 判断扫描页（无内嵌图片或无文本）
+                text = page.get_text().strip()
+                if not text:
+                    total_images += 1
 
         doc.close()
         return str(total_images)
@@ -85,6 +102,7 @@ def pdf_to_markdown(file_path: str, max_pages: int = 20) -> str:
         for idx, page in enumerate(doc)
         if idx < max_pages
     ]
+    doc.close()
     return "# PDF Summary\n" + "\n\n".join(pages)
 
 
@@ -102,15 +120,20 @@ def debug_file_path(file_input: str) -> dict:
 
     test_dir_path = (Path(TEST_DIR) / file_input).resolve()
     project_root_path = (Path(PROJECT_ROOT) / file_input).resolve()
-    recommended_path = test_dir_path if test_dir_path.exists() else project_root_path
+    recommended_path = None
+    if test_dir_path.exists():
+        recommended_path = test_dir_path
+    elif project_root_path.exists():
+        recommended_path = project_root_path
 
     return {
         "cleaned_filename": file_input,
         "test_dir_path": str(test_dir_path),
         "test_dir_exists": test_dir_path.exists(),
+        
         "project_root_path": str(project_root_path),
         "project_root_exists": project_root_path.exists(),
-        "recommended_path": str(recommended_path)
+        "recommended_path": str(recommended_path) if recommended_path else None
     }
 
 
