@@ -16,8 +16,8 @@ import cv2
 # 确保Tesseract OCR可执行文件路径正确（根据你的安装路径修改）
 # Windows示例: pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Users\LGJ\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-os.environ["TESSDATA_PREFIX"] = r"C:\Users\LGJ\AppData\Local\Programs\Tesseract-OCR\tessdata"
+pytesseract.pytesseract.tesseract_cmd = "/opt/homebrew/bin/tesseract"
+os.environ["TESSDATA_PREFIX"] = "/opt/homebrew/share/tessdata"
 
 mcp = FastMCP()
 def load_image_unicode(path):

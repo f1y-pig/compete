@@ -337,6 +337,27 @@ oxy_space = [
     ),
 
     # 3. 文件处理相关（专用工具）
+    # === 新增 TXT 文件处理智能体 ===
+    oxy.StdioMCPClient(
+        name="text_tools",
+        params={"command": "python", "args": ["mcp_servers/text_tools.py"]},
+        description="TXT 文件处理工具：读取内容、调试路径"
+    ),
+    oxy.ReActAgent(
+        name="text_agent",
+        llm_model="default_llm",
+        tools=["text_tools"],
+        desc="TXT 文件处理智能体",
+        additional_prompt="""请按以下规则回答：
+        1. 对于TXT文件，使用text_tools提取文本内容；
+        2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+        3. 如果文件内容过长，应截断并说明；
+        4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+        5. 答案仅含核心信息，无多余描述，不包含换行符；
+        6. 不要包含"数据来源"等说明性文字；
+        7. 如果路径有问题，请先debug路径再尝试重新读取。"""
+    ),
+
     oxy.StdioMCPClient(
         name="pdf_tools",
         params={"command": "python", "args": ["mcp_servers/pdf_tools.py"]},
@@ -560,7 +581,7 @@ async def process_tasks(test_dir: str = "test", output_file: str = "result.jsonl
     """
     # 使用绝对路径
     TEST_DIR_ABS = r"/Users/dengken/Desktop/数据挖掘比赛/compete/OxyGent-main/test"
-    data_path = Path(TEST_DIR_ABS) / "part_data.jsonl"
+    data_path = Path(TEST_DIR_ABS) / "data.jsonl"
 
     if not data_path.exists():
         print(f"❌ Error: {data_path} not found. Please check the path.")
