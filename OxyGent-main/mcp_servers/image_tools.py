@@ -1,4 +1,4 @@
-# mcp_servers/vision_vl_tools.py
+
 import os
 import json
 import base64
@@ -6,11 +6,14 @@ import mimetypes
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()
 
 mcp = FastMCP()
 
 client = OpenAI(
     api_key=os.getenv("DASHSCOPE_API_KEY"),
+    # api_key="sk-1c5ef9f54c7c48e8a7c04c950da145b9",
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
 )
 

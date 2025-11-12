@@ -39,6 +39,20 @@ def call_video_tool(tool_name: str, payload: dict) -> dict:
         return json.loads(result.stdout.strip() or "{}")
     except json.JSONDecodeError:
         return {"error": result.stdout}
+
+def call_image_tool(tool_name: str, payload: dict) -> dict:
+    result = subprocess.run(
+        ["python", "mcp_servers/image_tools.py", tool_name, json.dumps(payload, ensure_ascii=False)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        return json.loads(result.stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        return {"status": "error", "message": result.stdout}
+
+    
 # -------------------- 文件处理函数 --------------------
 def handle_excel(file_path: str) -> Dict[str, Any]:
     try:
@@ -95,56 +109,48 @@ def handle_pdf(file_path: str) -> Dict[str, Any]:
         return {"file": file_path, "type": "pdf", "content": None, "error": str(e)}
 
 
-import json
-
-async def handle_image(file_path: str, oxy_request) -> dict:
+def handle_image(file_path: str) -> dict:
     """
     统一处理图片：
     1. 调用 video_tools.ocr_image_file 做 OCR；
-    2. 调用 image_tools.describe_images_with_qwen 获取场景/人物/商品概述；
+    2. 调用 image_tools.describe_images_with_qwen 获取场景/人物/商品；
     3. 把两段摘要合并写入 llm_input。
     """
+    image_path = str(Path(file_path).resolve())
     ocr_summary = "（未识别到文字）"
     vision_summary = "（未生成视觉概述）"
 
     # 1. OCR
     try:
-        ocr_resp = await oxy_request.call(
-            callee="video_tools",
-            arguments={
-                "tool_name": "ocr_image_file",
-                "arguments": {
-                    "image_path": file_path,
-                    "lang": "chi_sim+eng"
-                }
-            }
+        ocr_resp = call_video_tool(
+            "ocr_image_file",
+            {
+                "image_path": image_path,
+                "lang": "chi_sim+eng",
+            },
         )
-        ocr_json = json.loads(getattr(ocr_resp, "output", "{}"))
-        if ocr_json.get("status") == "success" and ocr_json.get("recognized_text"):
-            ocr_summary = ocr_json["recognized_text"].strip()
+        if ocr_resp.get("status") == "success" and ocr_resp.get("recognized_text"):
+            ocr_summary = ocr_resp["recognized_text"].strip()
         else:
-            ocr_summary = f"OCR失败：{ocr_json.get('error', '未知原因')}"
+            error_msg = ocr_resp.get("error") or ocr_resp.get("message") or "未知原因"
+            ocr_summary = f"OCR失败：{error_msg}"
     except Exception as exc:
         ocr_summary = f"OCR调用异常：{exc}"
 
     # 2. 视觉理解（多图时可传列表）
     try:
-        image_url_list = [str(Path(file_path).resolve())] 
-        vision_resp = await oxy_request.call(
-            callee="image_tools",
-            arguments={
-                "tool_name": "describe_images_with_qwen",
-                "arguments": {
-                    "image_urls": json.dumps(image_url_list, ensure_ascii=False),  # 若已上传到 HTTP，可直接传 URL
-                    "question": "概括图片中的场景、人物/商品及显著特征"
-                }
-            }
+        vision_resp = call_image_tool(
+            "describe_images_with_qwen",
+            {
+                "image_urls": json.dumps([image_path], ensure_ascii=False),
+                "question": "概括图片中的场景、人物、商品及显著特征",
+            },
         )
-        vision_json = json.loads(getattr(vision_resp, "output", "{}"))
-        if vision_json.get("status") == "success":
-            vision_summary = vision_json["summary"].strip()
+        if vision_resp.get("status") == "success" and vision_resp.get("summary"):
+            vision_summary = vision_resp["summary"].strip()
         else:
-            vision_summary = f"视觉理解失败：{vision_json.get('message', '未知原因')}"
+            error_msg = vision_resp.get("message") or vision_resp.get("error") or "未知原因"
+            vision_summary = f"视觉理解失败：{error_msg}"
     except Exception as exc:
         vision_summary = f"视觉工具调用异常：{exc}"
 
@@ -157,9 +163,8 @@ async def handle_image(file_path: str, oxy_request) -> dict:
 
     return {
         "type": "image",
-        "llm_input": llm_input
+        "llm_input": llm_input,
     }
-
 
 def handle_audio(file_path: str) -> Dict[str, Any]:
     path = Path(file_path)

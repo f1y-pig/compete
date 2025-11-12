@@ -59,13 +59,14 @@ def multi_format_qa(
             print(f"使用备选路径：{absolute_path}")
         else:
             return {
-                "error": f"文件不存在。尝试的路径：\n- {absolute_path}\n- {alternative_path}",
+                "error": f"文件不存在。尝试的路径：\n-{absolute_path}\n-{alternative_path}",
                 "prompt_for_llm": "",
                 "file_type": "unknown",
                 "is_valid_file": False
             }
 
     # 调用 file_tools 的解析函数（使用绝对路径）
+    print(absolute_path)
     file_info = prepare_file_for_llm(absolute_path)
 
     if file_info.get("error"):
