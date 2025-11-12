@@ -1,16 +1,37 @@
-# mcp_servers/pptx_qa_tools.py
 """
 PPTX 专用工具：将幻灯片完整展开为 Markdown，或按页返回结构化数据。
+自动适配 multi_file_tools_server.py 的路径逻辑。
 """
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
-
 from pptx import Presentation
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 mcp = FastMCP()
+
+# 🔧 与 multi_file_tools_server.py 保持一致的路径定义
+PROJECT_ROOT = r"/Users/dengken/Desktop/数据挖掘比赛/compete"
+TEST_DIR = r"/Users/dengken/Desktop/数据挖掘比赛/compete/OxyGent-main/test"
+
+
+def _resolve_file_path(file_path: str) -> Path:
+    """
+    自动在 TEST_DIR / PROJECT_ROOT 中寻找文件。
+    """
+    path = Path(file_path)
+    if not path.is_absolute():
+        test_path = Path(TEST_DIR) / path
+        project_path = Path(PROJECT_ROOT) / path
+        if test_path.exists():
+            return test_path
+        elif project_path.exists():
+            return project_path
+        else:
+            return path  # 保留原始路径
+    return path
 
 
 def _slide_to_md(slide, index: int) -> str:
@@ -49,9 +70,8 @@ def pptx_to_markdown(
     file_path: str = Field(..., description="PPTX 文件绝对路径或相对 test/ 的路径"),
     max_slides: int = Field(default=20, description="最多展开的页面数量，默认 20")
 ) -> str:
-    path = Path(file_path)
-    if not path.is_absolute():
-        path = Path("OxyGent-main") / path  # 与 agent.py 的 test 目录保持一致
+    """PPTX → Markdown"""
+    path = _resolve_file_path(file_path)
     if not path.exists():
         return f"Error: file not found -> {path}"
 
@@ -77,9 +97,8 @@ def pptx_to_json(
     include_tables: bool = Field(default=True, description="是否包含表格内容"),
     include_images: bool = Field(default=True, description="是否统计图片数量")
 ) -> str:
-    path = Path(file_path)
-    if not path.is_absolute():
-        path = Path("OxyGent-main") / path
+    """PPTX → JSON"""
+    path = _resolve_file_path(file_path)
     if not path.exists():
         return json.dumps({"error": f"file not found: {str(path)}"}, ensure_ascii=False)
 
@@ -90,6 +109,7 @@ def pptx_to_json(
 
     summary = {
         "file": path.name,
+        "absolute_path": str(path),
         "slide_count": len(prs.slides),
         "slides": []
     }
@@ -115,6 +135,21 @@ def pptx_to_json(
     return json.dumps(summary, ensure_ascii=False, indent=2)
 
 
+# ✅ 新增路径调试接口：方便和 multi_file_tools_server 共用
+@mcp.tool(description="调试 PPTX 文件路径解析")
+def debug_pptx_path(file_input: str = Field(..., description="输入文件名或路径")):
+    path = _resolve_file_path(file_input)
+    return {
+        "input": file_input,
+        "resolved_path": str(path),
+        "exists": path.exists(),
+        "test_dir": TEST_DIR,
+        "project_root": PROJECT_ROOT
+    }
+
+
 if __name__ == "__main__":
     print("Starting PPTX QA Tool...")
+    print(f"PROJECT_ROOT: {PROJECT_ROOT}")
+    print(f"TEST_DIR: {TEST_DIR}")
     mcp.run()
