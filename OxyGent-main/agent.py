@@ -1074,12 +1074,12 @@ async def intent_workflow(oxy_request: OxyRequest):
 
 # -------------------------- OxyGent 空间配置 --------------------------
 oxy_space = [
-    # 1. 核心 LLM - 默认模型（带默认值）
+    # 1. 核心 LLM - 默认模型
     oxy.HttpLLM(
         name="default_llm",
-        api_key=os.getenv("DEFAULT_LLM_API_KEY", "default_key"),
-        base_url=os.getenv("DEFAULT_LLM_BASE_URL", "https://api.openai.com/v1"),
-        model_name=os.getenv("DEFAULT_LLM_MODEL_NAME", "gpt-3.5-turbo"),
+        api_key=os.getenv("DEFAULT_LLM_API_KEY"),
+        base_url=os.getenv("DEFAULT_LLM_BASE_URL"),
+        model_name=os.getenv("DEFAULT_LLM_MODEL_NAME"),
         llm_params={"temperature": 0.3},
         semaphore=8,
         timeout=300,
@@ -1088,28 +1088,15 @@ oxy_space = [
     # 2. 千问模型作为备用LLM
     oxy.HttpLLM(
         name="qwen_llm",
-        api_key=os.getenv("BACKUP_LLM_API_KEY", "sk-1c5ef9f54c7c48e8a7c04c950da145b9"),
-        base_url=os.getenv("BACKUP_LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        model_name=os.getenv("BACKUP_LLM_MODEL_NAME", "qwen-plus"),
+        api_key="sk-1c5ef9f54c7c48e8a7c04c950da145b9",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name="qwen-plus",
         llm_params={"temperature": 0.3},
         semaphore=8,
         timeout=300,
     ),
 
-    # 3. 文件处理相关
-    oxy.MCPTool(
-        name="file_tools",
-        func=prepare_file_for_llm,
-        description="处理各类文件预处理（Excel/TXT/PPTX/PDF/图片等）"
-    ),
-    oxy.StdioMCPClient(
-        name="multi_format_qa_tools",
-        params={
-            "command": "uv",
-            "args": ["--directory", "./mcp_servers", "run", "multi_format_qa_tools.py"]
-        },
-        description="多格式文件问答工具，解析文件内容并回答问题"
-    ),
+    # 3. 文件处理相关（专用工具）
     oxy.StdioMCPClient(
         name="pdf_tools",
         params={"command": "python", "args": ["mcp_servers/pdf_tools.py"]},
@@ -1130,84 +1117,117 @@ oxy_space = [
         params={"command": "python", "args": ["mcp_servers/image_tools.py"]},
         description="根据图片内容概括出主要信息，理解图片内容"
     ),
+    oxy.StdioMCPClient(
+        name="pptx_tools",
+        params={"command": "python", "args": ["mcp_servers/pptx_tools.py"]},
+        description="PPTX 专用工具：将幻灯片完整展开为 Markdown 或输出结构化 JSON"
+    ),
 
-
-    # 4. 主要文件处理智能体
+    # 4. 文件智能体（每类文件专用）
+    oxy.ReActAgent(
+        name="pdf_agent",
+        llm_model="default_llm",
+        tools=["pdf_tools"],
+        desc="PDF 文件处理智能体",
+        additional_prompt="""请按以下规则回答：
+1. 对于PDF文件，使用pdf_tools提取文本和图片信息；
+2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+3. 如果无法从文件中找到确切答案，基于相关知识给出合理答案；
+4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+5. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
+6. 不要包含"数据来源"等说明性文字；
+7. 如果路径出现问题或报错，请尝试 debug 路径 并重复逻辑；"""
+    ),
+    oxy.ReActAgent(
+        name="video_agent",
+        llm_model="default_llm",
+        tools=["video_tools"],
+        desc="视频文件处理智能体",
+        additional_prompt="""请按以下规则回答：
+1. 对于视频文件，使用video_tools提取时长、帧及文字信息；
+2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+3. 如果无法从文件中找到确切答案，基于相关知识给出合理答案；
+4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+5. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
+6. 不要包含"数据来源"等说明性文字；
+7. 如果提取到的字符很少，可尝试使用补充周边时间点的帧；"""
+    ),
+    oxy.ReActAgent(
+        name="media_agent",
+        llm_model="default_llm",
+        tools=["media_tools"],
+        desc="音频文件处理智能体",
+        additional_prompt="""请按以下规则回答：
+1. 对于音频文件，使用media_tools提取时长和文本；
+2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+3. 如果无法从文件中找到确切答案，基于相关知识给出合理答案；
+4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+5. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
+6. 不要包含"数据来源"等说明性文字；"""
+    ),
+    oxy.ReActAgent(
+        name="image_agent",
+        llm_model="default_llm",
+        tools=["image_tools"],
+        desc="图片文件处理智能体",
+        additional_prompt="""请按以下规则回答：
+1. 对于图片文件，使用image_tools进行文字识别和图像理解；
+2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+3. 如果OCR文字没有逻辑或很少，可基于图像内容给出合理答案；
+4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+5. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
+6. 不要包含"数据来源"等说明性文字；"""
+    ),
+    oxy.ReActAgent(
+        name="pptx_agent",
+        llm_model="default_llm",
+        tools=["pptx_tools"],
+        desc="PPTX 文件处理智能体",
+        additional_prompt="""请按以下规则回答：
+1. 对于PPTX文件，使用pptx_tools展开幻灯片内容或输出结构化JSON；
+2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+3. 如果无法从文件中找到确切答案，基于相关知识给出合理答案；
+4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+5. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
+6. 不要包含"数据来源"等说明性文字；"""
+    ),
     oxy.ReActAgent(
         name="multi_format_agent",
         llm_model="default_llm",
-        tools=["file_tools", "multi_format_qa_tools", "pdf_tools", "video_tools", "media_tools","pptx_tools","image_tools"],
+        tools=["pdf_tools", "video_tools", "media_tools", "pptx_tools", "image_tools"],
         desc="处理所有文件相关问题，基于文件内容回答",
-        additional_prompt="""
-请按以下规则回答：
-1. 优先使用 multi_format_qa_tools 处理文件问答；
-2. 对于特定文件类型，可以按需使用对应的专用工具；
-3. 严格按格式要求输出（如阿拉伯数字、小写英文）；
-4. 如果无法从文件中找到确切答案，基于相关知识给出合理答案；
-5. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
-6. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
-7. 不要包含"数据来源"等说明性文字。
-8. 如果路径出现问题或者报错 请尝试debug路径 并重复刚才的逻辑 debug失败再使用其他逻辑
-9. 如果视频提取到的字符很少 可以尝试使用补充周边时间点的帧的函数
-10. 不要把interval设置的太小 会导致超时
-11. 提取图片信息时 如果ocr文字没有逻辑或者很少 请使用imagetools进行图像理解
-"""
+        additional_prompt="""请按以下规则回答：
+1. 对于特定文件类型，使用对应的专用工具；
+2. 严格按格式要求输出（如阿拉伯数字、小写英文）；
+3. 如果无法从文件中找到确切答案，基于相关知识给出合理答案；
+4. 不要输出"Not found in file"，直接给出基于知识的最佳答案；
+5. 答案仅含核心信息，无多余描述，不包含换行符，仅占一行；
+6. 不要包含"数据来源"等说明性文字；
+7. 如果路径出现问题或者报错，请尝试 debug 路径 并重复逻辑，debug失败再使用其他逻辑；
+8. 如果视频提取到的字符很少，可以尝试使用补充周边时间点的帧的函数；
+9. 提取图片信息时，如果 OCR 文字没有逻辑或者很少，请使用 imagetools 进行图像理解。"""
     ),
 
-    # 5. 其他工具
+    # 5. 其他工具和智能体
     oxy.StdioMCPClient(
         name="web_tools",
         params={"command": "python", "args": ["mcp_servers/web_tools.py"]},
         description="获取网页内容，特别是京东商品信息"
     ),
+    oxy.ReActAgent(
+        name="web_agent",
+        llm_model="default_llm",
+        tools=["web_tools"],
+        desc="处理网页内容查询，特别是京东商品信息",
+        additional_prompt="""1. 需要解析URL或网页内容时调用web_tools
+2. 京东商品查询需提取商品ID
+3. 严格按格式要求输出结果
+4. 不要包含"数据来源"等说明性文字"""
+    ),
     oxy.StdioMCPClient(
         name="github_tools",
         params={"command": "python", "args": ["mcp_servers/github_tools.py"]},
         description="获取GitHub仓库信息、发布版本和issues"
-    ),
-
-    # 6. 增强版外部搜索工具（集成百度API）
-    oxy.StdioMCPClient(
-        name="external_search_tools",
-        params={"command": "python", "args": ["mcp_servers/external_search_tools.py"]},
-        description="增强版外部搜索工具，集成百度API实时搜索和数据分析"
-    ),
-
-    # 7. 时间工具 - 使用内置时间工具
-    oxy.StdioMCPClient(
-        name="time_tools",
-        params={
-            "command": "python",
-            "args": ["mcp_servers/time_tools_server.py"]
-        },
-        description="查询当前时间、UTC时间、时间戳和时间差计算"
-    ),
-
-    oxy.ReActAgent(
-        name="time_agent",
-        llm_model="default_llm",
-        tools=["time_tools"],
-        desc="处理时间查询相关问题"
-    ),
-    oxy.ReActAgent(
-        name="web_agent",
-        llm_model="default_llm",
-        tools=["web_tools", "external_search_tools"],  # 添加搜索工具作为备用
-        desc="处理网页内容查询，支持直接URL访问和网页内容提取",
-        additional_prompt="""
-    【处理规则】：
-    1. 优先使用 web_tools 直接访问URL获取内容
-    2. 如果URL无效或无法访问，再使用 external_search_tools 搜索相关信息
-    3. 对于京东商品，优先使用商品ID直接访问
-    4. 严格按格式要求输出结果
-    5. 不要包含"数据来源"等说明性文字
-    6. 答案不包含换行符，仅占一行
-
-    【URL识别】：
-    - http:// 或 https:// 开头的直接访问
-    - www. 开头的补全为 https://
-    - 京东商品ID（纯数字）构造为 https://item.jd.com/{id}.html
-    """
     ),
     oxy.ReActAgent(
         name="github_agent",
@@ -1215,29 +1235,22 @@ oxy_space = [
         tools=["github_tools"],
         desc="处理GitHub相关查询，如版本、issues等"
     ),
-
+    oxy.StdioMCPClient(
+        name="external_search_tools",
+        params={"command": "python", "args": ["mcp_servers/external_search_tools.py"]},
+        description="增强版外部搜索工具，集成百度API实时搜索和数据分析"
+    ),
     oxy.ReActAgent(
         name="external_search_agent",
         llm_model="default_llm",
-        tools=["external_search_tools", "web_tools"],  # 添加web_tools作为备用
-        desc="处理需要外部网络搜索的查询，集成多源搜索和直接URL访问",
-        additional_prompt="""
-    【处理优先级】：
-    1. 如果输入包含完整URL → 优先使用web_tools直接访问
-    2. 如果输入包含京东商品ID → 构造URL并使用web_tools访问  
-    3. 其他情况 → 使用external_search_tools进行多源搜索
-
-    【搜索优化策略】：
-    - 当搜索返回具体URL时，应该优先访问这些URL获取详细内容
-    - 不要只依赖搜索摘要，要访问具体网页获取完整信息
-    - 如果搜索结果不理想，可以尝试不同的搜索关键词
-
-    【输出要求】：
-    1. 直接输出基于搜索结果的核心答案
-    2. 不要包含"数据来源"等说明性文字
-    3. 答案格式简洁明了，不包含换行符
-    4. 如果无法获取确切信息，基于相关知识给出合理答案
-    """
+        tools=["external_search_tools"],
+        desc="处理需要外部网络搜索的查询，集成百度API实时搜索",
+        additional_prompt="""1. 优先使用百度API获取实时网络信息
+2. 如果搜索工具无法获取具体信息，基于自身知识给出合理答案
+3. 不要输出"Not found"或"无法获取"等否定性回答
+4. 直接输出基于知识的最佳答案
+5. 不要包含"数据来源"等说明性文字
+6. 答案格式简洁明了，不包含换行符"""
     ),
     oxy.ReActAgent(
         name="chat_gpt",
@@ -1267,14 +1280,24 @@ oxy_space = [
         tools=["inventory_tools"],
         desc="处理库存管理相关任务"
     ),
+    oxy.StdioMCPClient(
+        name="time_tools",
+        params={"command": "python", "args": ["-m", "mcp_server_time", "--local-timezone=Asia/Shanghai"]},
+        description="查询当前时间"
+    ),
+    oxy.ReActAgent(
+        name="time_agent",
+        llm_model="default_llm",
+        tools=["time_tools"],
+        desc="处理时间查询相关问题"
+    ),
 
-    # 9. 意图识别智能体（核心调度逻辑）
+    # Workflow Agent
     oxy.WorkflowAgent(
         name="intent_agent",
         llm_model="default_llm",
         desc="根据用户问题识别意图，输出需调用的智能体列表",
-        additional_prompt="""
-1. 问题含文件名称/路径或需解析文件→["multi_format_agent"]；
+        additional_prompt="""1. 问题含文件名称/路径或需解析文件→对应专用 agent；
 2. 时间查询相关→["time_agent"]；
 3. 订单相关→["delivery_agent"]；
 4. 库存相关→["inventory_agent"]；
@@ -1282,31 +1305,25 @@ oxy_space = [
 6. GitHub相关→["github_agent"]；
 7. 涉及网络搜索、实时数据、增长数据→优先["external_search_agent"]；
 8. 其他情况→["chat_gpt"]；
-9. 仅输出智能体名称列表，无其他文字（如 ["multi_format_agent"]）。
-10. 如果用户 query 中包含“文件列表/文件路径”等内容，请原样保留，并在输出的 arguments 中增加同名字段（如 file_name）传递给下游 agent。
-注意：所有文件处理问题都使用 multi_format_agent，它会自动处理路径和内容解析。
-""",
-       func_workflow=intent_workflow
+9. 仅输出智能体名称列表，无其他文字（如 ["pdf_agent"]）。
+10. 如果用户 query 中包含“文件列表/文件路径”等内容，请原样保留，并在输出的 arguments 中增加同名字段（如 file_name）传递给下游 agent。""",
+        func_workflow=intent_workflow
     ),
-
-    # 10. 主智能体（调度中心）
     oxy.WorkflowAgent(
         is_master=True,
         name="master_agent",
         llm_model="default_llm",
-        sub_agents=["chat_gpt", "multi_format_agent", "time_agent", "delivery_agent",
-                    "inventory_agent", "intent_agent", "web_agent", "github_agent",
-                    "external_search_agent"],
+        sub_agents=[
+            "chat_gpt", "pdf_agent", "video_agent", "media_agent", "image_agent", 
+            "pptx_agent", "time_agent", "delivery_agent", "inventory_agent", 
+            "intent_agent", "web_agent", "github_agent", "external_search_agent",
+            "multi_format_agent"
+        ],
         func_workflow=master_workflow,
-        additional_prompt="通过 intent_agent 识别用户意图，优先使用external_search_agent获取实时数据，如果无法获取具体信息则基于知识给出合理答案，汇总结果后按要求格式输出，答案不包含换行符，仅占一行，不要包含数据来源等说明性文字"
-    ),
-    # ✅ 新增：PPTX 专用工具
-    oxy.StdioMCPClient(
-        name="pptx_tools",
-        params={"command": "python", "args": ["mcp_servers/pptx_tools.py"]},
-        description="PPTX 专用工具：将幻灯片完整展开为 Markdown 或输出结构化 JSON"
+        additional_prompt="通过 intent_agent 识别用户意图，优先使用对应专用文件 agent 或搜索 agent 汇总结果，答案不包含换行符，仅占一行，不要包含数据来源等说明性文字"
     ),
 ]
+
 
 
 # -------------------------- 核心任务处理函数 --------------------------
